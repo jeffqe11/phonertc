@@ -9,13 +9,10 @@ import java.util.UUID;
 import android.Manifest;
 import android.app.Activity;
 import android.graphics.Point;
-import android.util.Log;
 import android.view.View;
-import android.webkit.WebView;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
-import org.apache.cordova.CordovaWebView;
 import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -48,7 +45,6 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 
 	private PeerConnectionFactory _peerConnectionFactory;
 	private Map<String, Session> _sessions;
-	private Map<String, View> _streams;
 
 	private VideoConfig _videoConfig;
 	private VideoGLView _videoView;
@@ -57,7 +53,6 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 	private XWalkView.LayoutParams _videoParams;
 	private boolean _shouldDispose = true;
 	private boolean _initializedAndroidGlobals = false;
-	private String currentUserId;
 
 	public CallbackContext callbackContext;
 
@@ -66,11 +61,10 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 	public PhoneRTCPlugin() {
 		_remoteVideos = new ArrayList<VideoTrackRendererPair>();
 		_sessions = new HashMap<String, Session>();
-		_streams = new HashMap<String, View>();
 	}
 
 	@Override
-	public boolean execute(String action, final JSONArray args,
+	public boolean execute(String action, JSONArray args,
 			CallbackContext callbackContext) throws JSONException {
 
 		final CallbackContext _callbackContext = callbackContext;
@@ -199,7 +193,7 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 							(int)(_videoConfig.getContainer().getHeight() * _videoConfig.getDevicePixelRatio()));
 					_videoParams.leftMargin = (int)(_videoConfig.getContainer().getX() * _videoConfig.getDevicePixelRatio());
 					_videoParams.topMargin = (int)(_videoConfig.getContainer().getY() * _videoConfig.getDevicePixelRatio());
-
+					
 					if (_videoView == null) {
 						// createVideoView();
 
@@ -229,21 +223,8 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 					}
 				}
 			});
-		} else if(action.equals("showVideoById")){
-                 cordova.getActivity().runOnUiThread(new Runnable() {
-                   @Override
-                   public void run() {
-                     Log.i("switch from plugin", "switching video!" + args.toString());
-                     try {
-                       String playerId = args.getString(0);
-                       showVideoById(playerId);
-                     } catch (JSONException e) {
-                       e.printStackTrace();
-                     }
-
-                   }
-                 });
-        } else if (action.equals("checkPermissions")){
+		}
+		else if (action.equals("checkPermissions")){
 			if(PermissionHelper.hasPermission(this, permissions[0]) && PermissionHelper.hasPermission(this, permissions[1]) && PermissionHelper.hasPermission(this, permissions[2])) {
 				callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK));
 				return true;
@@ -268,7 +249,6 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 		_videoSource = _peerConnectionFactory.createVideoSource(_videoCapturer,
 				new MediaConstraints());
 		_localVideo = new VideoTrackRendererPair(_peerConnectionFactory.createVideoTrack("ARDAMSv0", _videoSource), null);
-		this.currentUserId = "";
 		refreshVideoView();
 	}
 
@@ -337,47 +317,26 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 		throw new RuntimeException("Failed to open capturer");
 	}
 
-	public void addRemoteVideoTrack(VideoTrack videoTrack, String userId) {
-		VideoTrackRendererPair pair = new VideoTrackRendererPair(videoTrack, null);
-		_remoteVideos.add(pair);
-        pair.setUserId(userId);
-        this.currentUserId = userId;
-		_remoteVideos.add(pair);
+	public void addRemoteVideoTrack(VideoTrack videoTrack) {
+		_remoteVideos.add(new VideoTrackRendererPair(videoTrack, null));
 		refreshVideoView();
 	}
 
 	public void removeRemoteVideoTrack(VideoTrack videoTrack) {
-      while(_remoteVideos != null && _remoteVideos.size() > 0) {
-        VideoTrackRendererPair pair = _remoteVideos.get(0);
-        if (pair.getVideoRenderer() != null) {
-          pair.getVideoTrack().removeRenderer(pair.getVideoRenderer());
-          pair.setVideoRenderer(null);
-        }
+		for (VideoTrackRendererPair pair : _remoteVideos) {
+			if (pair.getVideoTrack() == videoTrack) {
+				if (pair.getVideoRenderer() != null) {
+					pair.getVideoTrack().removeRenderer(pair.getVideoRenderer());
+					pair.setVideoRenderer(null);
+				}
 
+				pair.setVideoTrack(null);
 
-        pair.setVideoTrack(null);
-        _remoteVideos.remove(pair);
-
-//        if(_remoteVideos.size() > 0){
-//          this.currentUserId = _remoteVideos.get(0).getUserId();
-//        }
-
-        pair = null;
-      }
-
-    try {
-      if (_sessions != null) {
-        for (String sessionKey : _sessions.keySet()) {
-          Session session = _sessions.get(sessionKey);
-          session.disconnect(true);
-        }
-      }
-    }catch (Exception exc){
-
-    }
-
-      this.currentUserId = "";
-      refreshVideoView();
+				_remoteVideos.remove(pair);
+				refreshVideoView();
+				return;
+			}
+		}
 	}
 
 	private void createVideoView() {
@@ -391,12 +350,6 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 
 		((XWalkView) webView.getView()).addView(_videoView, _videoParams);
 	}
-
-    public void showVideoById(String playerId){
-        Log.i("switch user", "Switching user with id" + playerId);
-        this.currentUserId = playerId;
-        refreshVideoView();
-    }
 
 	private void refreshVideoView() {
 		int n = _remoteVideos.size();
@@ -422,24 +375,46 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 		if (n > 0) {
 			createVideoView();
 
-			int videoSize = (int)((float)_videoConfig.getContainer().getWidth());
+			int rows = n < 9 ? 2 : 3;
+			int videosInRow = n == 2 ? 2 : (int)Math.ceil((float)n / rows);
 
-			int y = getCenter(1, videoSize, _videoConfig.getContainer().getHeight());
-      int x = getCenter(1, videoSize, _videoConfig.getContainer().getWidth());
+			int videoSize = (int)((float)_videoConfig.getContainer().getWidth() / videosInRow);
+			int actualRows = (int)Math.ceil((float)n / videosInRow);
 
-			int videoSizeAsPercentage = 100;
+			int y = getCenter(actualRows, videoSize, _videoConfig.getContainer().getHeight());
 
-      for(VideoTrackRendererPair pair : _remoteVideos){
-        Log.i("render_user_current ", "current user " + currentUserId);
-        if(pair.getUserId().equals(currentUserId)) {
-          //Log.i("render_user_current ", "iterated user " + currentUserId);
-          pair.setVideoRenderer(new VideoRenderer(
-            VideoRendererGui.create(x, y, videoSizeAsPercentage, videoSizeAsPercentage,
-              RendererCommon.ScalingType.SCALE_ASPECT_FILL, true)));
+			int videoIndex = 0;
+			int videoSizeAsPercentage = getPercentage(videoSize, _videoConfig.getContainer().getWidth());
 
-          pair.getVideoTrack().addRenderer(pair.getVideoRenderer());
-        }
-      }
+			for (int row = 0; row < rows && videoIndex < n; row++) {
+				int x = getCenter(row < row - 1 || n % rows == 0 ?
+									videosInRow : n - (Math.min(n, videoIndex + videosInRow) - 1),
+								videoSize,
+								_videoConfig.getContainer().getWidth());
+
+				for (int video = 0; video < videosInRow && videoIndex < n; video++) {
+					VideoTrackRendererPair pair = _remoteVideos.get(videoIndex++);
+
+                    int widthPercentage = videoSizeAsPercentage;
+                    int heightPercentage = videoSizeAsPercentage;
+                    if((x + widthPercentage) > 100){
+                        widthPercentage = widthPercentage - x;
+                    }
+                    if((y + heightPercentage) > 100){
+						heightPercentage = heightPercentage - y;
+                    }
+
+					pair.setVideoRenderer(new VideoRenderer(
+							VideoRendererGui.create(x, y, widthPercentage, heightPercentage,
+									RendererCommon.ScalingType.SCALE_ASPECT_BALANCED, true)));
+
+					pair.getVideoTrack().addRenderer(pair.getVideoRenderer());
+
+					x += videoSizeAsPercentage;
+				}
+
+				y += getPercentage(videoSize, _videoConfig.getContainer().getHeight());
+			}
 
 			if (_videoConfig.getLocal() != null && _localVideo != null) {
 				_localVideo.getVideoTrack().addRenderer(new VideoRenderer(
@@ -447,7 +422,7 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 												getPercentage(_videoConfig.getLocal().getY(), _videoConfig.getContainer().getHeight()),
 												getPercentage(_videoConfig.getLocal().getWidth(), _videoConfig.getContainer().getWidth()),
 												getPercentage(_videoConfig.getLocal().getHeight(), _videoConfig.getContainer().getHeight()),
-												RendererCommon.ScalingType.SCALE_ASPECT_FILL,
+								RendererCommon.ScalingType.SCALE_ASPECT_FILL,
 												true)));
 
 			}
@@ -486,7 +461,7 @@ public class PhoneRTCPlugin extends CordovaPlugin {
 
 					if (_videoView != null) {
 						_videoView.setVisibility(View.GONE);
-						((XWalkView) webView.getView()).removeView(_videoView);
+						((WebView) webView.getView()).removeView(_videoView);
 					}
 
 					if (_videoSource != null) {
